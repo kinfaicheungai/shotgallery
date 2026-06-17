@@ -3,16 +3,13 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
-<title>Shot Reference · FRACTURED MIND</title>
+<title>Shot Reference Viewer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
 <style>
   :root{
     --bg:#0c0b0a; --panel:#161412; --panel2:#1d1a17; --chip:#221f1b;
@@ -24,46 +21,20 @@
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
     font-family:'Geist Mono',monospace;height:100%;overflow:hidden;}
-  #root{height:100vh;height:100dvh;}
+  #root{height:100vh;}
   img{-webkit-user-drag:none;}
   ::-webkit-scrollbar{width:8px;height:8px;}
   ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
   ::-webkit-scrollbar-track{background:transparent;}
-  input,select,button,textarea{font-family:inherit;}
+  input,select,button{font-family:inherit;}
   button{cursor:pointer;}
-  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.35;}}
   @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
-  @keyframes slideUp{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
-  @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+  @keyframes slideUp{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
-/* ═══════════════════════════════════════════════════════════
-   FIREBASE CONFIG - reuses ScriptBreaker project
-═══════════════════════════════════════════════════════════ */
-const FB_CONFIG = {
-  apiKey: "AIzaSyD3iid1fb9yxsSTmjpAoWaFYZsLQDypcEA",
-  authDomain: "scriptbreaker-ea1db.firebaseapp.com",
-  projectId: "scriptbreaker-ea1db",
-  storageBucket: "scriptbreaker-ea1db.firebasestorage.app",
-  messagingSenderId: "91198906123",
-  appId: "1:91198906123:web:58183d16476ba3424f0c0e"
-};
-
-let _fbApp = null;
-function getFbApp(){
-  if(_fbApp) return _fbApp;
-  try { _fbApp = firebase.initializeApp(FB_CONFIG); }
-  catch(e){ _fbApp = firebase.app(); }
-  return _fbApp;
-}
-function getStorage(){ getFbApp(); return firebase.storage(); }
-function getDb(){ getFbApp(); return firebase.firestore(); }
-
-const GALLERY_PASSWORD = "fracturedmind"; // simple shared password
-const SESSION_KEY = "sb_gallery_unlocked";
 
 /* ═══════════════════════════════════════════════════════════
    FILENAME PARSER
@@ -71,106 +42,83 @@ const SESSION_KEY = "sb_gallery_unlocked";
    "Scene 60_3 desc.png", "60-3-desc.png"
 ═══════════════════════════════════════════════════════════ */
 function parseFilename(name){
-  const base = name.replace(/\.[^.]+$/, ''); // strip extension
-  // Normalize: remove "Scene", "S" prefix variants, replace separators
+  const base = name.replace(/\.[^.]+$/, '');
   let s = base.replace(/^scene\s*/i, '').replace(/^s(?=\d)/i, '');
   s = s.replace(/[\s\-]+/g, '_');
   const m = s.match(/^(\d+)[_]+(\d+)[_]*(.*)$/);
   if(m){
-    const sceneNum = parseInt(m[1], 10);
-    const shotNum = parseInt(m[2], 10);
-    const desc = (m[3]||'').replace(/_/g,' ').trim();
-    return { sceneNum, shotNum, desc, raw: name, valid: true };
+    return {
+      sceneNum: parseInt(m[1], 10),
+      shotNum: parseInt(m[2], 10),
+      desc: (m[3]||'').replace(/_/g,' ').trim(),
+      raw: name, valid: true
+    };
   }
-  // Fallback: just a scene number, no shot
   const m2 = s.match(/^(\d+)[_]*(.*)$/);
   if(m2){
-    return { sceneNum: parseInt(m2[1],10), shotNum: 0, desc:(m2[2]||'').replace(/_/g,' ').trim(), raw:name, valid:true };
+    return {
+      sceneNum: parseInt(m2[1],10), shotNum: 0,
+      desc:(m2[2]||'').replace(/_/g,' ').trim(),
+      raw:name, valid:true
+    };
   }
   return { sceneNum: null, shotNum: 0, desc: base, raw: name, valid: false };
 }
 
-/* ═══════════════════════════════════════════════════════════
-   PASSWORD GATE
-═══════════════════════════════════════════════════════════ */
-function PasswordGate({onUnlock}){
-  const [pw, setPw] = React.useState('');
-  const [err, setErr] = React.useState(false);
-
-  function submit(e){
-    e.preventDefault();
-    if(pw === GALLERY_PASSWORD){
-      sessionStorage.setItem(SESSION_KEY, '1');
-      onUnlock();
-    } else {
-      setErr(true);
-      setTimeout(()=>setErr(false), 1500);
-    }
-  }
-
-  return (
-    <div style={{height:'100%',display:'flex',alignItems:'center',justifyContent:'center',
-      background:'var(--bg)',padding:20}}>
-      <form onSubmit={submit} style={{width:'100%',maxWidth:340,textAlign:'center'}}>
-        <div style={{fontFamily:"'Instrument Serif',serif",fontStyle:'italic',fontSize:32,
-          color:'var(--text)',marginBottom:6}}>Shot Reference</div>
-        <div style={{fontSize:11,color:'var(--textDim)',letterSpacing:'0.08em',marginBottom:28}}>
-          FRACTURED MIND
-        </div>
-        <input
-          type="password" value={pw} onChange={e=>setPw(e.target.value)}
-          placeholder="Enter password" autoFocus
-          style={{width:'100%',background:'var(--panel)',border:`1px solid ${err?'var(--danger)':'var(--border)'}`,
-            borderRadius:8,padding:'12px 14px',fontSize:14,color:'var(--text)',
-            textAlign:'center',outline:'none',transition:'border-color 0.15s'}}/>
-        {err && <div style={{fontSize:11,color:'var(--danger)',marginTop:8}}>Incorrect password</div>}
-        <button type="submit"
-          style={{width:'100%',marginTop:14,padding:'11px 0',background:'var(--accent)',
-            border:'none',borderRadius:8,color:'#15110a',fontSize:13,fontWeight:600,
-            letterSpacing:'0.02em'}}>
-          Enter
-        </button>
-      </form>
-    </div>
-  );
-}
+const IMG_EXT = /\.(jpg|jpeg|png|gif|webp|heic|bmp)$/i;
 
 /* ═══════════════════════════════════════════════════════════
-   MAIN APP
+   MAIN APP (iPad-compatible: uses plain <input multiple>
+   instead of webkitdirectory, which is unreliable on iOS
+   Safari. User browses to the folder in Files app and
+   multi-selects all images inside. Filenames are preserved
+   when images live in Files (not Photos, which rewrites names).
 ═══════════════════════════════════════════════════════════ */
 function App(){
-  const [unlocked, setUnlocked] = React.useState(()=>sessionStorage.getItem(SESSION_KEY)==='1');
-  if(!unlocked) return <PasswordGate onUnlock={()=>setUnlocked(true)}/>;
-  return <Gallery/>;
-}
-
-function Gallery(){
-  const [shots, setShots] = React.useState([]); // [{sceneNum,shotNum,desc,url,path,id}]
-  const [loading, setLoading] = React.useState(true);
+  const [shots, setShots] = React.useState([]); // {parsed, url, name}
+  const [loading, setLoading] = React.useState(false);
+  const [loadMsg, setLoadMsg] = React.useState('');
+  const [hasLoaded, setHasLoaded] = React.useState(false);
   const [selScene, setSelScene] = React.useState('all');
   const [search, setSearch] = React.useState('');
-  const [lightbox, setLightbox] = React.useState(null); // index into filtered list
-  const [showUpload, setShowUpload] = React.useState(false);
-  const [mob, setMob] = React.useState(window.innerWidth<=820 || /iPhone|iPad|Android/i.test(navigator.userAgent));
+  const [lightbox, setLightbox] = React.useState(null);
+  const fileInputRef = React.useRef(null);
 
-  React.useEffect(()=>{
-    const fn = ()=>setMob(window.innerWidth<=820 || /iPhone|iPad|Android/i.test(navigator.userAgent));
-    window.addEventListener('resize', fn);
-    return ()=>window.removeEventListener('resize', fn);
-  },[]);
+  function pickFiles(){
+    fileInputRef.current?.click();
+  }
 
-  // Load shot list from Firestore (metadata) - images themselves are in Storage
-  React.useEffect(()=>{
-    const db = getDb();
-    const unsub = db.collection('gallery_shots').orderBy('sceneNum').orderBy('shotNum')
-      .onSnapshot(snap=>{
-        const list = [];
-        snap.forEach(doc=> list.push({id:doc.id, ...doc.data()}));
-        setShots(list);
-        setLoading(false);
-      }, err=>{ console.warn(err); setLoading(false); });
-    return unsub;
-  },[]);
+  async function handleFilesSelected(e){
+    const fileList = Array.from(e.target.files || []);
+    const imageFiles = fileList.filter(f => IMG_EXT.test(f.name));
+    if(imageFiles.length === 0){
+      setLoadMsg('No images found in selection');
+      return;
+    }
+    setLoading(true);
+    setLoadMsg(`Loading ${imageFiles.length} images...`);
+
+    // Revoke old URLs to free memory
+    setShots(prev => { prev.forEach(s => URL.revokeObjectURL(s.url)); return prev; });
+
+    const parsed = [];
+    for(let i=0; i<imageFiles.length; i++){
+      const file = imageFiles[i];
+      const url = URL.createObjectURL(file);
+      parsed.push({ ...parseFilename(file.name), url, name: file.name });
+      if(i % 20 === 0) setLoadMsg(`Loading ${i+1}/${imageFiles.length}...`);
+    }
+    parsed.sort((a,b)=>{
+      const sa = a.sceneNum ?? 99999, sb = b.sceneNum ?? 99999;
+      if(sa !== sb) return sa - sb;
+      return (a.shotNum||0) - (b.shotNum||0);
+    });
+    setShots(parsed);
+    setHasLoaded(true);
+    setLoading(false);
+    // Reset input so picking the same folder again still fires onChange
+    e.target.value = '';
+  }
 
   const sceneNumbers = React.useMemo(()=>{
     const set = new Set(shots.map(s=>s.sceneNum).filter(n=>n!=null));
@@ -185,35 +133,68 @@ function Gallery(){
       list = list.filter(s=>
         String(s.sceneNum).includes(q) ||
         (s.desc||'').toLowerCase().includes(q) ||
-        (s.raw||'').toLowerCase().includes(q)
+        (s.name||'').toLowerCase().includes(q)
       );
     }
     return list;
   },[shots, selScene, search]);
 
-  const totalCount = shots.length;
+  // Hidden file input - works on iPad Safari (shows Files app picker with folder support)
+  const fileInputEl = (
+    <input ref={fileInputRef} type="file" multiple accept="image/*"
+      onChange={handleFilesSelected} style={{display:'none'}}/>
+  );
+
+  if(!hasLoaded){
+    return (
+      <div style={{height:'100%',display:'flex',alignItems:'center',justifyContent:'center',padding:30}}>
+        {fileInputEl}
+        <div style={{maxWidth:380,textAlign:'center'}}>
+          <div style={{fontSize:40,marginBottom:16,opacity:0.3}}>🎞</div>
+          <div style={{fontFamily:"'Instrument Serif',serif",fontStyle:'italic',fontSize:28,marginBottom:8}}>
+            Shot Reference Viewer
+          </div>
+          <div style={{fontSize:12,color:'var(--textDim)',marginBottom:24,lineHeight:1.6}}>
+            Tap below, choose "Browse" to find your folder in Files,
+            then select all images inside (tap Select, then tap each
+            image or "Select All"). Filenames like "60_3_description.png"
+            auto-link to Scene 60, Shot 3.
+          </div>
+          {loading ? (
+            <div style={{fontSize:12,color:'var(--textMute)'}}>{loadMsg}</div>
+          ) : (
+            <button onClick={pickFiles}
+              style={{padding:'12px 28px',background:'var(--accent)',border:'none',
+                borderRadius:8,color:'#15110a',fontSize:13,fontWeight:600}}>
+              Select Images
+            </button>
+          )}
+          {loadMsg && !loading && (
+            <div style={{fontSize:11,color:'var(--danger)',marginTop:10}}>{loadMsg}</div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden',
-      animation:'fadeIn 0.3s ease'}}>
+    <div style={{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden',animation:'fadeIn 0.25s ease'}}>
+      {fileInputEl}
 
       {/* Header */}
-      <div style={{flexShrink:0,borderBottom:'1px solid var(--border)',
-        padding: mob ? '12px 14px' : '16px 28px',
-        display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',background:'var(--panel)'}}>
+      <div style={{flexShrink:0,borderBottom:'1px solid var(--border)',padding:'14px 16px',
+        display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',background:'var(--panel)'}}>
         <div style={{display:'flex',alignItems:'baseline',gap:10,flexShrink:0}}>
-          <span style={{fontFamily:"'Instrument Serif',serif",fontStyle:'italic',
-            fontSize: mob?20:26,color:'var(--text)',whiteSpace:'nowrap'}}>Shot Reference</span>
-          <span style={{fontSize:9,color:'var(--textDim)',letterSpacing:'0.08em'}}>
-            {totalCount} IMAGES
+          <span style={{fontFamily:"'Instrument Serif',serif",fontStyle:'italic',fontSize:20,color:'var(--text)'}}>
+            Shot Reference
           </span>
+          <span style={{fontSize:9,color:'var(--textDim)'}}>{shots.length} IMAGES</span>
         </div>
 
-        <div style={{flex:1,minWidth: mob ? '100%' : 200, display:'flex', gap:8, order: mob?3:0}}>
-          <input
-            value={search} onChange={e=>setSearch(e.target.value)}
+        <div style={{flex:1,minWidth:160,order:3}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
             placeholder="Search scene, shot, description..."
-            style={{flex:1,background:'var(--panel2)',border:'1px solid var(--border)',
+            style={{width:'100%',background:'var(--panel2)',border:'1px solid var(--border)',
               borderRadius:7,padding:'7px 12px',fontSize:12,color:'var(--text)',outline:'none'}}/>
         </div>
 
@@ -227,20 +208,20 @@ function Gallery(){
           })}
         </select>
 
-        <button onClick={()=>setShowUpload(true)}
-          style={{flexShrink:0,padding:'7px 16px',background:'var(--accent)',border:'none',
-            borderRadius:7,color:'#15110a',fontSize:12,fontWeight:600,
-            display:'flex',alignItems:'center',gap:6}}>
-          + Upload
+        <button onClick={pickFiles}
+          style={{flexShrink:0,padding:'7px 12px',background:'transparent',
+            border:'1px solid var(--border)',borderRadius:7,color:'var(--textMute)',fontSize:11}}>
+          Re-select images
         </button>
       </div>
 
-      {/* Scene quick-jump strip (desktop) */}
-      {!mob && sceneNumbers.length>0 && (
+      {/* Scene quick-jump strip */}
+      {sceneNumbers.length>0 && (
         <div style={{flexShrink:0,borderBottom:'1px solid var(--border)',
-          padding:'8px 28px',display:'flex',gap:5,overflowX:'auto',background:'var(--bg)'}}>
+          padding:'8px 16px',display:'flex',gap:5,overflowX:'auto',background:'var(--bg)',
+          WebkitOverflowScrolling:'touch'}}>
           <button onClick={()=>setSelScene('all')}
-            style={{padding:'3px 11px',borderRadius:99,fontSize:10,whiteSpace:'nowrap',
+            style={{padding:'4px 12px',borderRadius:99,fontSize:11,whiteSpace:'nowrap',flexShrink:0,
               background:selScene==='all'?'var(--accent)':'transparent',
               border:`1px solid ${selScene==='all'?'var(--accent)':'var(--border)'}`,
               color:selScene==='all'?'#15110a':'var(--textMute)'}}>
@@ -248,7 +229,7 @@ function Gallery(){
           </button>
           {sceneNumbers.map(n=>(
             <button key={n} onClick={()=>setSelScene(String(n))}
-              style={{padding:'3px 11px',borderRadius:99,fontSize:10,whiteSpace:'nowrap',
+              style={{padding:'4px 12px',borderRadius:99,fontSize:11,whiteSpace:'nowrap',flexShrink:0,
                 background:selScene===String(n)?'var(--accent)':'transparent',
                 border:`1px solid ${selScene===String(n)?'var(--accent)':'var(--border)'}`,
                 color:selScene===String(n)?'#15110a':'var(--textMute)'}}>
@@ -259,78 +240,53 @@ function Gallery(){
       )}
 
       {/* Grid */}
-      <div style={{flex:1,overflow:'auto',padding: mob?'12px':'20px 28px'}}>
-        {loading && (
-          <div style={{textAlign:'center',padding:60,color:'var(--textDim)',fontSize:12}}>
-            Loading...
-          </div>
-        )}
-        {!loading && filtered.length===0 && (
+      <div style={{flex:1,overflow:'auto',padding:'14px 16px',WebkitOverflowScrolling:'touch'}}>
+        {filtered.length===0 && (
           <div style={{textAlign:'center',padding:60,color:'var(--textDim)'}}>
-            <div style={{fontSize:40,opacity:0.2,marginBottom:10}}>🎞</div>
+            <div style={{fontSize:36,opacity:0.2,marginBottom:8}}>🎞</div>
             <div style={{fontSize:13}}>
-              {shots.length===0 ? 'No images yet - tap + Upload to add references' : 'No matches found'}
+              {shots.length===0 ? 'No images found in this folder' : 'No matches found'}
             </div>
           </div>
         )}
-        <div style={{display:'grid',
-          gridTemplateColumns: mob ? 'repeat(2,1fr)' : 'repeat(auto-fill,minmax(190px,1fr))',
-          gap: mob?8:14}}>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:10}}>
           {filtered.map((shot, idx)=>(
-            <ShotThumb key={shot.id} shot={shot} onClick={()=>setLightbox(idx)} mob={mob}/>
+            <ShotThumb key={shot.url+idx} shot={shot} onClick={()=>setLightbox(idx)}/>
           ))}
         </div>
       </div>
 
-      {/* Lightbox */}
       {lightbox!==null && (
-        <Lightbox
-          shots={filtered}
-          index={lightbox}
-          onClose={()=>setLightbox(null)}
-          onNav={(i)=>setLightbox(i)}
-          mob={mob}/>
-      )}
-
-      {/* Upload modal */}
-      {showUpload && (
-        <UploadModal onClose={()=>setShowUpload(false)} mob={mob}/>
+        <Lightbox shots={filtered} index={lightbox}
+          onClose={()=>setLightbox(null)} onNav={setLightbox}/>
       )}
     </div>
   );
 }
 
-function ShotThumb({shot, onClick, mob}){
-  const [loaded, setLoaded] = React.useState(false);
+function ShotThumb({shot, onClick}){
   return (
-    <div onClick={onClick} style={{cursor:'pointer',animation:'slideUp 0.25s ease'}}>
+    <div onClick={onClick} style={{cursor:'pointer',animation:'slideUp 0.2s ease'}}>
       <div style={{position:'relative',aspectRatio:'16/9',borderRadius:8,overflow:'hidden',
         background:'var(--panel2)',border:'1px solid var(--border)'}}>
-        {!loaded && <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',
-          justifyContent:'center',color:'var(--textDim)',fontSize:9}}>...</div>}
-        <img src={shot.thumbUrl||shot.url} alt={shot.desc} loading="lazy"
-          onLoad={()=>setLoaded(true)}
-          style={{width:'100%',height:'100%',objectFit:'cover',opacity:loaded?1:0,
-            transition:'opacity 0.2s'}}/>
+        <img src={shot.url} alt={shot.desc} loading="lazy"
+          style={{width:'100%',height:'100%',objectFit:'cover'}}/>
         <div style={{position:'absolute',top:6,left:6,background:'rgba(12,11,10,0.85)',
           borderRadius:4,padding:'2px 7px',fontSize:9,color:'var(--accent2)',fontWeight:600}}>
-          S{shot.sceneNum}{shot.shotNum?'.'+shot.shotNum:''}
+          {shot.sceneNum!=null ? `S${shot.sceneNum}${shot.shotNum?'.'+shot.shotNum:''}` : '?'}
         </div>
       </div>
-      <div style={{fontSize: mob?10:11,color:'var(--textMute)',marginTop:5,
-        overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
-        textTransform:'lowercase'}}>
-        {shot.desc || 'untitled'}
+      <div style={{fontSize:11,color:'var(--textMute)',marginTop:5,
+        overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textTransform:'lowercase'}}>
+        {shot.desc || shot.name}
       </div>
     </div>
   );
 }
 
-function Lightbox({shots, index, onClose, onNav, mob}){
+function Lightbox({shots, index, onClose, onNav}){
   const shot = shots[index];
-  const [imgLoaded, setImgLoaded] = React.useState(false);
-
-  React.useEffect(()=>{ setImgLoaded(false); },[index]);
+  const touchStart = React.useRef(null);
 
   React.useEffect(()=>{
     function onKey(e){
@@ -342,8 +298,6 @@ function Lightbox({shots, index, onClose, onNav, mob}){
     return ()=>window.removeEventListener('keydown', onKey);
   },[index, shots.length]);
 
-  // Touch swipe for mobile
-  const touchStart = React.useRef(null);
   function onTouchStart(e){ touchStart.current = e.touches[0].clientX; }
   function onTouchEnd(e){
     if(touchStart.current==null) return;
@@ -360,354 +314,67 @@ function Lightbox({shots, index, onClose, onNav, mob}){
       display:'flex',flexDirection:'column',animation:'fadeIn 0.15s ease'}}
       onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
 
-      {/* Top bar */}
-      <div style={{flexShrink:0,padding: mob?'10px 12px':'14px 24px',
+      <div style={{flexShrink:0,padding:'12px 16px',
+        paddingTop:'max(12px,env(safe-area-inset-top))',
         display:'flex',alignItems:'center',gap:10}}>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontSize:11,color:'var(--accent2)',fontWeight:600}}>
-            SCENE {shot.sceneNum}{shot.shotNum?` · SHOT ${shot.shotNum}`:''}
+            {shot.sceneNum!=null ? `SCENE ${shot.sceneNum}${shot.shotNum?` · SHOT ${shot.shotNum}`:''}` : 'UNKNOWN SCENE'}
           </div>
-          <div style={{fontSize: mob?11:13,color:'var(--textMute)',marginTop:2,
+          <div style={{fontSize:13,color:'var(--textMute)',marginTop:2,
             overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-            {shot.desc||'untitled'}
+            {shot.desc || shot.name}
           </div>
         </div>
-        <div style={{fontSize:10,color:'var(--textDim)',flexShrink:0}}>
-          {index+1} / {shots.length}
-        </div>
+        <div style={{fontSize:10,color:'var(--textDim)',flexShrink:0}}>{index+1} / {shots.length}</div>
         <button onClick={onClose}
-          style={{flexShrink:0,width:34,height:34,borderRadius:'50%',
-            background:'var(--panel2)',border:'1px solid var(--border)',
-            color:'var(--textMute)',fontSize:16,display:'grid',placeItems:'center'}}>
-          x
-        </button>
+          style={{flexShrink:0,width:34,height:34,borderRadius:'50%',background:'var(--panel2)',
+            border:'1px solid var(--border)',color:'var(--textMute)',fontSize:16,
+            display:'grid',placeItems:'center'}}>x</button>
       </div>
 
-      {/* Image area */}
       <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',
-        position:'relative',overflow:'hidden',padding: mob?'0 8px':'0 80px'}}>
-
-        {!mob && index>0 && (
+        position:'relative',overflow:'hidden',padding:'0 80px'}}>
+        {index>0 && (
           <button onClick={()=>onNav(index-1)}
             style={{position:'absolute',left:16,top:'50%',transform:'translateY(-50%)',
               width:48,height:48,borderRadius:'50%',background:'var(--panel2)',
               border:'1px solid var(--border)',color:'var(--text)',fontSize:20,
-              display:'grid',placeItems:'center',zIndex:10}}>
-            ‹
-          </button>
+              display:'grid',placeItems:'center',zIndex:10}}>‹</button>
         )}
-
-        {!imgLoaded && <div style={{position:'absolute',color:'var(--textDim)',fontSize:11}}>Loading...</div>}
         <img src={shot.url} alt={shot.desc}
-          onLoad={()=>setImgLoaded(true)}
-          style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',
-            opacity:imgLoaded?1:0,transition:'opacity 0.2s',borderRadius:4}}/>
-
-        {!mob && index<shots.length-1 && (
+          style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:4}}/>
+        {index<shots.length-1 && (
           <button onClick={()=>onNav(index+1)}
             style={{position:'absolute',right:16,top:'50%',transform:'translateY(-50%)',
               width:48,height:48,borderRadius:'50%',background:'var(--panel2)',
               border:'1px solid var(--border)',color:'var(--text)',fontSize:20,
-              display:'grid',placeItems:'center',zIndex:10}}>
-            ›
-          </button>
+              display:'grid',placeItems:'center',zIndex:10}}>›</button>
         )}
       </div>
 
-      {/* Mobile bottom nav */}
-      {mob && (
-        <div style={{flexShrink:0,padding:'10px 16px',
-          paddingBottom:'calc(env(safe-area-inset-bottom) + 10px)',
-          display:'flex',gap:10}}>
-          <button onClick={()=>index>0&&onNav(index-1)} disabled={index===0}
-            style={{flex:1,padding:'10px 0',background:'var(--panel2)',
-              border:'1px solid var(--border)',borderRadius:8,
-              color: index===0?'var(--textDim)':'var(--text)',fontSize:13}}>
-            ‹ Prev
-          </button>
-          <button onClick={()=>index<shots.length-1&&onNav(index+1)} disabled={index===shots.length-1}
-            style={{flex:1,padding:'10px 0',background:'var(--panel2)',
-              border:'1px solid var(--border)',borderRadius:8,
-              color: index===shots.length-1?'var(--textDim)':'var(--text)',fontSize:13}}>
-            Next ›
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-/* ═══════════════════════════════════════════════════════════
-   UPLOAD MODAL - batch upload with filename parsing
-═══════════════════════════════════════════════════════════ */
-function UploadModal({onClose, mob}){
-  const [files, setFiles] = React.useState([]); // [{file, parsed, status, progress}]
-  const [dragOver, setDragOver] = React.useState(false);
-  const [uploading, setUploading] = React.useState(false);
-  const [done, setDone] = React.useState(0);
-  const fileInputRef = React.useRef(null);
-
-  function handleFiles(fileList){
-    const arr = Array.from(fileList).filter(f=>f.type.startsWith('image/'));
-    const parsed = arr.map(f=>({
-      file: f,
-      parsed: parseFilename(f.name),
-      status: 'pending', // pending | uploading | done | error
-      previewUrl: URL.createObjectURL(f),
-    }));
-    setFiles(prev => [...prev, ...parsed]);
-  }
-
-  function onDrop(e){
-    e.preventDefault(); setDragOver(false);
-    handleFiles(e.dataTransfer.files);
-  }
-
-  function removeFile(idx){
-    setFiles(prev => prev.filter((_,i)=>i!==idx));
-  }
-
-  function updateParsed(idx, patch){
-    setFiles(prev => prev.map((f,i)=> i===idx ? {...f, parsed:{...f.parsed,...patch}} : f));
-  }
-
-  async function uploadAll(){
-    setUploading(true);
-    setDone(0);
-    const storage = getStorage();
-    const db = getDb();
-
-    for(let i=0; i<files.length; i++){
-      const item = files[i];
-      if(item.status==='done') { setDone(d=>d+1); continue; }
-      setFiles(prev => prev.map((f,idx)=> idx===i ? {...f,status:'uploading'} : f));
-
-      try {
-        const timestamp = Date.now();
-        const safeName = item.file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
-        const path = `shot_refs/${timestamp}_${safeName}`;
-        const ref = storage.ref(path);
-        await ref.put(item.file);
-        const url = await ref.getDownloadURL();
-
-        await db.collection('gallery_shots').add({
-          sceneNum: item.parsed.sceneNum,
-          shotNum: item.parsed.shotNum,
-          desc: item.parsed.desc,
-          raw: item.file.name,
-          url,
-          path,
-          uploadedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        });
-
-        setFiles(prev => prev.map((f,idx)=> idx===i ? {...f,status:'done'} : f));
-        setDone(d=>d+1);
-      } catch(e){
-        console.error('Upload error:', e);
-        setFiles(prev => prev.map((f,idx)=> idx===i ? {...f,status:'error'} : f));
-      }
-    }
-    setUploading(false);
-  }
-
-  const allDone = files.length>0 && files.every(f=>f.status==='done');
-  const validCount = files.filter(f=>f.parsed.valid).length;
-  const invalidCount = files.length - validCount;
-
-  return (
-    <div style={{position:'fixed',inset:0,background:'rgba(8,7,6,0.85)',zIndex:9500,
-      display:'flex',alignItems: mob?'flex-end':'center',justifyContent:'center'}}
-      onClick={e=>{if(e.target===e.currentTarget && !uploading)onClose();}}>
-      <div style={{background:'var(--panel)',border:'1px solid var(--borderHi)',
-        borderRadius: mob?'16px 16px 0 0':14,
-        width: mob?'100%':640, maxHeight: mob?'90vh':'85vh',
-        display:'flex',flexDirection:'column',overflow:'hidden',
-        boxShadow:'0 12px 50px rgba(0,0,0,0.5)'}}>
-
-        {/* Header */}
-        <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',
-          display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
-          <span style={{fontFamily:"'Instrument Serif',serif",fontStyle:'italic',
-            fontSize:18,color:'var(--text)',flex:1}}>
-            Upload Shot References
-          </span>
-          {!uploading && (
-            <button onClick={onClose}
-              style={{color:'var(--textDim)',fontSize:18,background:'transparent',
-                border:'none'}}>x</button>
-          )}
-        </div>
-
-        <div style={{flex:1,overflow:'auto',padding:'16px 20px'}}>
-
-          {/* Drop zone */}
-          {files.length===0 && (
-            <div
-              onDragOver={e=>{e.preventDefault(); setDragOver(true);}}
-              onDragLeave={()=>setDragOver(false)}
-              onDrop={onDrop}
-              onClick={()=>fileInputRef.current?.click()}
-              style={{border:`2px dashed ${dragOver?'var(--accent)':'var(--border)'}`,
-                borderRadius:10,padding: mob?'40px 16px':'60px 20px',textAlign:'center',
-                cursor:'pointer',background: dragOver?'rgba(217,142,63,0.06)':'transparent',
-                transition:'all 0.15s'}}>
-              <div style={{fontSize:36,opacity:0.3,marginBottom:10}}>📁</div>
-              <div style={{fontSize:13,color:'var(--textMute)',marginBottom:4}}>
-                {mob ? 'Tap to select photos' : 'Drag images here or click to browse'}
-              </div>
-              <div style={{fontSize:10,color:'var(--textDim)'}}>
-                Filenames like "60_3_description.png" auto-detect scene + shot
-              </div>
-            </div>
-          )}
-          <input ref={fileInputRef} type="file" accept="image/*" multiple
-            onChange={e=>handleFiles(e.target.files)} style={{display:'none'}}/>
-
-          {/* File list */}
-          {files.length>0 && (
-            <>
-              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
-                marginBottom:10}}>
-                <div style={{fontSize:11,color:'var(--textMute)'}}>
-                  {files.length} files selected
-                  {invalidCount>0 && <span style={{color:'var(--danger)'}}> · {invalidCount} need review</span>}
-                </div>
-                {!uploading && (
-                  <button onClick={()=>fileInputRef.current?.click()}
-                    style={{fontSize:10,color:'var(--info)',background:'transparent',border:'none'}}>
-                    + Add more
-                  </button>
-                )}
-              </div>
-
-              <div style={{display:'flex',flexDirection:'column',gap:6}}>
-                {files.map((item, idx)=>(
-                  <FileRow key={idx} item={item} idx={idx}
-                    onRemove={()=>removeFile(idx)}
-                    onUpdate={(patch)=>updateParsed(idx, patch)}
-                    disabled={uploading}/>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Footer */}
-        {files.length>0 && (
-          <div style={{padding:'14px 20px',borderTop:'1px solid var(--border)',
-            display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
-            {uploading && (
-              <div style={{flex:1,fontSize:11,color:'var(--textMute)'}}>
-                Uploading {done}/{files.length}...
-              </div>
-            )}
-            {!uploading && !allDone && (
-              <div style={{flex:1,fontSize:11,color:'var(--textDim)'}}>
-                Ready to upload {files.length} image{files.length>1?'s':''}
-              </div>
-            )}
-            {allDone && (
-              <div style={{flex:1,fontSize:11,color:'var(--success)'}}>
-                ✓ All uploaded successfully
-              </div>
-            )}
-            {!allDone ? (
-              <button onClick={uploadAll} disabled={uploading || files.length===0}
-                style={{padding:'9px 22px',background:'var(--accent)',border:'none',
-                  borderRadius:7,color:'#15110a',fontSize:12,fontWeight:600,
-                  opacity:uploading?0.6:1}}>
-                {uploading ? 'Uploading...' : `Upload ${files.length} image${files.length>1?'s':''}`}
-              </button>
-            ) : (
-              <button onClick={onClose}
-                style={{padding:'9px 22px',background:'var(--accent)',border:'none',
-                  borderRadius:7,color:'#15110a',fontSize:12,fontWeight:600}}>
-                Done
-              </button>
-            )}
-          </div>
-        )}
+      {/* Touch-friendly bottom nav */}
+      <div style={{flexShrink:0,padding:'10px 16px',
+        paddingBottom:'max(10px,env(safe-area-inset-bottom))',
+        display:'flex',gap:10}}>
+        <button onClick={()=>index>0&&onNav(index-1)} disabled={index===0}
+          style={{flex:1,padding:'12px 0',background:'var(--panel2)',
+            border:'1px solid var(--border)',borderRadius:8,
+            color: index===0?'var(--textDim)':'var(--text)',fontSize:14}}>
+          ‹ Prev
+        </button>
+        <button onClick={()=>index<shots.length-1&&onNav(index+1)} disabled={index===shots.length-1}
+          style={{flex:1,padding:'12px 0',background:'var(--panel2)',
+            border:'1px solid var(--border)',borderRadius:8,
+            color: index===shots.length-1?'var(--textDim)':'var(--text)',fontSize:14}}>
+          Next ›
+        </button>
       </div>
     </div>
   );
 }
-
-function FileRow({item, idx, onRemove, onUpdate, disabled}){
-  const [editing, setEditing] = React.useState(false);
-  const p = item.parsed;
-
-  const statusIcon = {
-    pending: null,
-    uploading: <div style={{width:12,height:12,border:'2px solid var(--info)',
-      borderTopColor:'transparent',borderRadius:'50%',animation:'spin 0.6s linear infinite'}}/>,
-    done: <span style={{color:'var(--success)',fontSize:13}}>✓</span>,
-    error: <span style={{color:'var(--danger)',fontSize:13}}>✕</span>,
-  }[item.status];
-
-  return (
-    <div style={{display:'flex',alignItems:'center',gap:10,padding:'8px 10px',
-      background:'var(--panel2)',border:`1px solid ${p.valid?'var(--border)':'var(--danger)'}`,
-      borderRadius:8}}>
-      <img src={item.previewUrl} alt=""
-        style={{width:44,height:44,objectFit:'cover',borderRadius:5,flexShrink:0}}/>
-
-      <div style={{flex:1,minWidth:0}}>
-        {!editing ? (
-          <>
-            <div style={{display:'flex',alignItems:'center',gap:6}}>
-              <span style={{fontSize:11,fontWeight:600,
-                color: p.valid?'var(--accent2)':'var(--danger)'}}>
-                {p.valid ? `S${p.sceneNum}${p.shotNum?'.'+p.shotNum:''}` : 'Unparsed'}
-              </span>
-              {!p.valid && <span style={{fontSize:9,color:'var(--danger)'}}>tap to set scene</span>}
-            </div>
-            <div style={{fontSize:10,color:'var(--textDim)',overflow:'hidden',
-              textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-              {p.desc || item.file.name}
-            </div>
-          </>
-        ) : (
-          <div style={{display:'flex',gap:6}}>
-            <input type="number" placeholder="Scene" value={p.sceneNum||''}
-              onChange={e=>onUpdate({sceneNum: e.target.value?parseInt(e.target.value):null, valid:true})}
-              style={{width:60,background:'var(--bg)',border:'1px solid var(--border)',
-                borderRadius:4,padding:'4px 6px',fontSize:11,color:'var(--text)'}}/>
-            <input type="number" placeholder="Shot" value={p.shotNum||''}
-              onChange={e=>onUpdate({shotNum: e.target.value?parseInt(e.target.value):0})}
-              style={{width:50,background:'var(--bg)',border:'1px solid var(--border)',
-                borderRadius:4,padding:'4px 6px',fontSize:11,color:'var(--text)'}}/>
-            <input type="text" placeholder="Description" value={p.desc||''}
-              onChange={e=>onUpdate({desc: e.target.value})}
-              style={{flex:1,background:'var(--bg)',border:'1px solid var(--border)',
-                borderRadius:4,padding:'4px 6px',fontSize:11,color:'var(--text)',minWidth:0}}/>
-          </div>
-        )}
-      </div>
-
-      {statusIcon}
-
-      {!disabled && (
-        <>
-          <button onClick={()=>setEditing(e=>!e)}
-            style={{color:'var(--textDim)',fontSize:11,background:'transparent',
-              border:'none',flexShrink:0}}>
-            {editing?'✓':'✎'}
-          </button>
-          <button onClick={onRemove}
-            style={{color:'var(--textDim)',fontSize:14,background:'transparent',
-              border:'none',flexShrink:0}}>
-            x
-          </button>
-        </>
-      )}
-    </div>
-  );
-}
-
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
-
 </script>
 </body>
 </html>
