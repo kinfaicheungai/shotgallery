@@ -98,9 +98,6 @@ function App(){
     setLoading(true);
     setLoadMsg(`Loading ${imageFiles.length} images...`);
 
-    // Revoke old URLs to free memory
-    setShots(prev => { prev.forEach(s => URL.revokeObjectURL(s.url)); return prev; });
-
     const parsed = [];
     for(let i=0; i<imageFiles.length; i++){
       const file = imageFiles[i];
@@ -108,15 +105,22 @@ function App(){
       parsed.push({ ...parseFilename(file.name), url, name: file.name });
       if(i % 20 === 0) setLoadMsg(`Loading ${i+1}/${imageFiles.length}...`);
     }
-    parsed.sort((a,b)=>{
-      const sa = a.sceneNum ?? 99999, sb = b.sceneNum ?? 99999;
-      if(sa !== sb) return sa - sb;
-      return (a.shotNum||0) - (b.shotNum||0);
+
+    // Merge with existing shots, deduplicate by filename, then sort
+    setShots(prev => {
+      const existingNames = new Set(prev.map(s => s.name));
+      const newShots = parsed.filter(s => !existingNames.has(s.name));
+      const merged = [...prev, ...newShots];
+      merged.sort((a,b)=>{
+        const sa = a.sceneNum ?? 99999, sb = b.sceneNum ?? 99999;
+        if(sa !== sb) return sa - sb;
+        return (a.shotNum||0) - (b.shotNum||0);
+      });
+      return merged;
     });
-    setShots(parsed);
     setHasLoaded(true);
     setLoading(false);
-    // Reset input so picking the same folder again still fires onChange
+    // Reset input so selecting again fires onChange
     e.target.value = '';
   }
 
@@ -211,7 +215,15 @@ function App(){
         <button onClick={pickFiles}
           style={{flexShrink:0,padding:'7px 12px',background:'transparent',
             border:'1px solid var(--border)',borderRadius:7,color:'var(--textMute)',fontSize:11}}>
-          Re-select images
+          + Add more
+        </button>
+        <button onClick={()=>{
+            setShots(prev=>{ prev.forEach(s=>URL.revokeObjectURL(s.url)); return []; });
+            setHasLoaded(false);
+          }}
+          style={{flexShrink:0,padding:'7px 12px',background:'transparent',
+            border:'1px solid var(--border)',borderRadius:7,color:'var(--textDim)',fontSize:11}}>
+          Clear all
         </button>
       </div>
 
