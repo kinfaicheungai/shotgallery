@@ -41,27 +41,69 @@
    Handles: "60_3_cu_hand_on_static.png", "S60_3_desc.png",
    "Scene 60_3 desc.png", "60-3-desc.png"
 ═══════════════════════════════════════════════════════════ */
-function parseFilename(name){
+/* ═══════════════════════════════════════════════════════════
+   PARSE RULES - configurable, persisted to localStorage
+═══════════════════════════════════════════════════════════ */
+const DEFAULT_RULES = {
+  delimiter: '_',           // character that separates segments
+  prefixes: 'S, Scene, EP', // comma-separated prefixes to strip (case-insensitive)
+  groupSegment: 1,          // which segment (1-indexed) is the "scene/group" number
+  sortSegment: 2,           // which segment (1-indexed) is the "shot/sort" number
+};
+
+const RULES_KEY = 'shotviewer_parse_rules';
+
+function loadRules(){
+  try {
+    const saved = localStorage.getItem(RULES_KEY);
+    if(saved) return { ...DEFAULT_RULES, ...JSON.parse(saved) };
+  } catch(e){}
+  return { ...DEFAULT_RULES };
+}
+
+function saveRules(rules){
+  try { localStorage.setItem(RULES_KEY, JSON.stringify(rules)); }
+  catch(e){ console.warn('Could not save rules', e); }
+}
+
+function parseFilename(name, rules){
+  rules = rules || DEFAULT_RULES;
   const base = name.replace(/\.[^.]+$/, '');
-  let s = base.replace(/^scene\s*/i, '').replace(/^s(?=\d)/i, '');
-  s = s.replace(/[\s\-]+/g, '_');
-  const m = s.match(/^(\d+)[_]+(\d+)[_]*(.*)$/);
-  if(m){
+
+  // Strip configured prefixes (case-insensitive), e.g. "S", "Scene", "EP"
+  let s = base;
+  const prefixList = (rules.prefixes||'').split(',').map(p=>p.trim()).filter(Boolean);
+  for(const prefix of prefixList){
+    const re = new RegExp('^' + prefix.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '\\s*', 'i');
+    if(re.test(s)){ s = s.replace(re, ''); break; }
+  }
+
+  // Normalize: spaces/dashes also act as soft delimiters alongside the configured one
+  const delim = rules.delimiter || '_';
+  const delimEscaped = delim.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  // Split on the configured delimiter (collapse repeats)
+  const segments = s.split(new RegExp(delimEscaped + '+')).filter(seg => seg !== '');
+
+  const gIdx = (rules.groupSegment||1) - 1;
+  const sIdx = (rules.sortSegment||2) - 1;
+
+  const groupRaw = segments[gIdx];
+  const sortRaw = segments[sIdx];
+
+  const groupNum = groupRaw!=null ? parseInt(groupRaw, 10) : NaN;
+  const sortNum = sortRaw!=null ? parseInt(sortRaw, 10) : NaN;
+
+  if(!isNaN(groupNum)){
+    // Description = all segments except the group/sort index ones
+    const descSegments = segments.filter((_, i) => i!==gIdx && i!==sIdx);
+    const desc = descSegments.join(' ').trim();
     return {
-      sceneNum: parseInt(m[1], 10),
-      shotNum: parseInt(m[2], 10),
-      desc: (m[3]||'').replace(/_/g,' ').trim(),
-      raw: name, valid: true
+      sceneNum: groupNum,
+      shotNum: isNaN(sortNum) ? 0 : sortNum,
+      desc, raw: name, valid: true
     };
   }
-  const m2 = s.match(/^(\d+)[_]*(.*)$/);
-  if(m2){
-    return {
-      sceneNum: parseInt(m2[1],10), shotNum: 0,
-      desc:(m2[2]||'').replace(/_/g,' ').trim(),
-      raw:name, valid:true
-    };
-  }
+
   return { sceneNum: null, shotNum: 0, desc: base, raw: name, valid: false };
 }
 
@@ -76,6 +118,8 @@ const IMG_EXT = /\.(jpg|jpeg|png|gif|webp|heic|bmp)$/i;
 ═══════════════════════════════════════════════════════════ */
 function App(){
   const [shots, setShots] = React.useState([]); // {parsed, url, name}
+  const [rules, setRules] = React.useState(loadRules);
+  const [showSettings, setShowSettings] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [loadMsg, setLoadMsg] = React.useState('');
   const [hasLoaded, setHasLoaded] = React.useState(false);
@@ -86,6 +130,25 @@ function App(){
 
   function pickFiles(){
     fileInputRef.current?.click();
+  }
+
+  function updateRules(newRules){
+    setRules(newRules);
+    saveRules(newRules);
+    // Re-parse existing shots with the new rules, without re-selecting files
+    setShots(prev => {
+      const reparsed = prev.map(s => ({
+        ...s,
+        ...parseFilename(s.name, newRules),
+        url: s.url, // keep existing object URL
+      }));
+      reparsed.sort((a,b)=>{
+        const sa = a.sceneNum ?? 99999, sb = b.sceneNum ?? 99999;
+        if(sa !== sb) return sa - sb;
+        return (a.shotNum||0) - (b.shotNum||0);
+      });
+      return reparsed;
+    });
   }
 
   async function handleFilesSelected(e){
@@ -102,7 +165,7 @@ function App(){
     for(let i=0; i<imageFiles.length; i++){
       const file = imageFiles[i];
       const url = URL.createObjectURL(file);
-      parsed.push({ ...parseFilename(file.name), url, name: file.name });
+      parsed.push({ ...parseFilename(file.name, rules), url, name: file.name });
       if(i % 20 === 0) setLoadMsg(`Loading ${i+1}/${imageFiles.length}...`);
     }
 
@@ -176,7 +239,17 @@ function App(){
           {loadMsg && !loading && (
             <div style={{fontSize:11,color:'var(--danger)',marginTop:10}}>{loadMsg}</div>
           )}
+          <div style={{marginTop:16}}>
+            <button onClick={()=>setShowSettings(true)}
+              style={{padding:'6px 14px',background:'transparent',border:'1px solid var(--border)',
+                borderRadius:7,color:'var(--textDim)',fontSize:11}}>
+              ⚙ Parsing rules
+            </button>
+          </div>
         </div>
+        {showSettings && (
+          <RulesModal rules={rules} onSave={updateRules} onClose={()=>setShowSettings(false)}/>
+        )}
       </div>
     );
   }
@@ -225,6 +298,11 @@ function App(){
             border:'1px solid var(--border)',borderRadius:7,color:'var(--textDim)',fontSize:11}}>
           Clear all
         </button>
+        <button onClick={()=>setShowSettings(true)}
+          style={{flexShrink:0,padding:'7px 12px',background:'transparent',
+            border:'1px solid var(--border)',borderRadius:7,color:'var(--textDim)',fontSize:11}}>
+          ⚙ Rules
+        </button>
       </div>
 
       {/* Scene quick-jump strip */}
@@ -272,6 +350,10 @@ function App(){
         <Lightbox shots={filtered} index={lightbox}
           onClose={()=>setLightbox(null)} onNav={setLightbox}/>
       )}
+
+      {showSettings && (
+        <RulesModal rules={rules} onSave={updateRules} onClose={()=>setShowSettings(false)}/>
+      )}
     </div>
   );
 }
@@ -291,6 +373,178 @@ function ShotThumb({shot, onClick}){
       <div style={{fontSize:11,color:'var(--textMute)',marginTop:5,
         overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textTransform:'lowercase'}}>
         {shot.desc || shot.name}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RULES MODAL - configure filename parsing with live preview
+═══════════════════════════════════════════════════════════ */
+function RulesModal({rules, onSave, onClose}){
+  const [delimiter, setDelimiter] = React.useState(rules.delimiter);
+  const [prefixes, setPrefixes] = React.useState(rules.prefixes);
+  const [groupSegment, setGroupSegment] = React.useState(rules.groupSegment);
+  const [sortSegment, setSortSegment] = React.useState(rules.sortSegment);
+  const [sample, setSample] = React.useState('60_3_cu_hand_on_static.png');
+
+  const draftRules = { delimiter, prefixes, groupSegment: Number(groupSegment), sortSegment: Number(sortSegment) };
+  const preview = parseFilename(sample, draftRules);
+
+  function handleSave(){
+    onSave(draftRules);
+    onClose();
+  }
+
+  function handleReset(){
+    setDelimiter(DEFAULT_RULES.delimiter);
+    setPrefixes(DEFAULT_RULES.prefixes);
+    setGroupSegment(DEFAULT_RULES.groupSegment);
+    setSortSegment(DEFAULT_RULES.sortSegment);
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(8,7,6,0.85)',zIndex:9500,
+      display:'flex',alignItems:'flex-end',justifyContent:'center'}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:'var(--panel)',border:'1px solid var(--borderHi)',
+        borderRadius:'16px 16px 0 0',width:'100%',maxWidth:560,maxHeight:'88vh',
+        display:'flex',flexDirection:'column',overflow:'hidden',
+        boxShadow:'0 -8px 40px rgba(0,0,0,0.5)'}}>
+
+        {/* Header */}
+        <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',
+          display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
+          <span style={{fontFamily:"'Instrument Serif',serif",fontStyle:'italic',
+            fontSize:19,color:'var(--text)',flex:1}}>
+            Filename Parsing Rules
+          </span>
+          <button onClick={onClose}
+            style={{color:'var(--textDim)',fontSize:18,background:'transparent',border:'none'}}>x</button>
+        </div>
+
+        <div style={{flex:1,overflow:'auto',padding:'16px 20px',display:'flex',flexDirection:'column',gap:16}}>
+
+          <div style={{fontSize:11,color:'var(--textMute)',lineHeight:1.6}}>
+            Tell the viewer how your filenames are structured, so it can
+            figure out the scene number and shot number automatically.
+          </div>
+
+          {/* Delimiter */}
+          <div>
+            <div style={{fontSize:10,color:'var(--textDim)',letterSpacing:'0.06em',marginBottom:6}}>
+              SEGMENT DELIMITER
+            </div>
+            <input value={delimiter} onChange={e=>setDelimiter(e.target.value)}
+              placeholder="_"
+              style={{width:80,background:'var(--panel2)',border:'1px solid var(--border)',
+                borderRadius:6,padding:'7px 10px',fontSize:13,color:'var(--text)',
+                textAlign:'center'}}/>
+            <span style={{fontSize:10,color:'var(--textDim)',marginLeft:10}}>
+              The character that separates parts of the filename (e.g. "_" or "-")
+            </span>
+          </div>
+
+          {/* Prefixes to strip */}
+          <div>
+            <div style={{fontSize:10,color:'var(--textDim)',letterSpacing:'0.06em',marginBottom:6}}>
+              PREFIXES TO IGNORE (comma-separated)
+            </div>
+            <input value={prefixes} onChange={e=>setPrefixes(e.target.value)}
+              placeholder="S, Scene, EP"
+              style={{width:'100%',background:'var(--panel2)',border:'1px solid var(--border)',
+                borderRadius:6,padding:'7px 10px',fontSize:13,color:'var(--text)',
+                boxSizing:'border-box'}}/>
+            <span style={{fontSize:10,color:'var(--textDim)'}}>
+              Letters before the number that should be removed, e.g. "S60" becomes "60"
+            </span>
+          </div>
+
+          {/* Segment positions */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            <div>
+              <div style={{fontSize:10,color:'var(--textDim)',letterSpacing:'0.06em',marginBottom:6}}>
+                GROUP NUMBER IS SEGMENT #
+              </div>
+              <input type="number" min="1" value={groupSegment}
+                onChange={e=>setGroupSegment(e.target.value)}
+                style={{width:'100%',background:'var(--panel2)',border:'1px solid var(--border)',
+                  borderRadius:6,padding:'7px 10px',fontSize:13,color:'var(--text)',
+                  textAlign:'center',boxSizing:'border-box'}}/>
+              <span style={{fontSize:10,color:'var(--textDim)'}}>e.g. scene number</span>
+            </div>
+            <div>
+              <div style={{fontSize:10,color:'var(--textDim)',letterSpacing:'0.06em',marginBottom:6}}>
+                SORT NUMBER IS SEGMENT #
+              </div>
+              <input type="number" min="1" value={sortSegment}
+                onChange={e=>setSortSegment(e.target.value)}
+                style={{width:'100%',background:'var(--panel2)',border:'1px solid var(--border)',
+                  borderRadius:6,padding:'7px 10px',fontSize:13,color:'var(--text)',
+                  textAlign:'center',boxSizing:'border-box'}}/>
+              <span style={{fontSize:10,color:'var(--textDim)'}}>e.g. shot number</span>
+            </div>
+          </div>
+
+          {/* Live preview */}
+          <div style={{background:'var(--panel2)',borderRadius:8,padding:'12px 14px',
+            border:'1px solid var(--border)'}}>
+            <div style={{fontSize:10,color:'var(--textDim)',letterSpacing:'0.06em',marginBottom:8}}>
+              TEST WITH A SAMPLE FILENAME
+            </div>
+            <input value={sample} onChange={e=>setSample(e.target.value)}
+              style={{width:'100%',background:'var(--bg)',border:'1px solid var(--border)',
+                borderRadius:6,padding:'7px 10px',fontSize:12,color:'var(--text)',
+                fontFamily:"'Geist Mono',monospace",boxSizing:'border-box',marginBottom:10}}/>
+            <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+              {preview.valid ? (
+                <>
+                  <span style={{fontSize:9,color:'var(--success)',
+                    background:'rgba(95,183,138,0.12)',padding:'3px 9px',borderRadius:99,
+                    border:'1px solid rgba(95,183,138,0.3)'}}>
+                    ✓ PARSED OK
+                  </span>
+                  <span style={{fontSize:12,color:'var(--accent2)',fontWeight:600}}>
+                    Group {preview.sceneNum}{preview.shotNum ? `, Sort ${preview.shotNum}` : ''}
+                  </span>
+                  {preview.desc && (
+                    <span style={{fontSize:11,color:'var(--textMute)'}}>
+                      "{preview.desc}"
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span style={{fontSize:9,color:'var(--danger)',
+                  background:'rgba(224,101,79,0.12)',padding:'3px 9px',borderRadius:99,
+                  border:'1px solid rgba(224,101,79,0.3)'}}>
+                  ✕ COULD NOT PARSE - check your rules
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{padding:'12px 20px',borderTop:'1px solid var(--border)',
+          paddingBottom:'max(12px,env(safe-area-inset-bottom))',
+          display:'flex',gap:8,flexShrink:0}}>
+          <button onClick={handleReset}
+            style={{padding:'9px 16px',background:'transparent',border:'1px solid var(--border)',
+              borderRadius:7,color:'var(--textDim)',fontSize:12}}>
+            Reset defaults
+          </button>
+          <div style={{flex:1}}/>
+          <button onClick={onClose}
+            style={{padding:'9px 18px',background:'transparent',border:'1px solid var(--border)',
+              borderRadius:7,color:'var(--textMute)',fontSize:12}}>
+            Cancel
+          </button>
+          <button onClick={handleSave}
+            style={{padding:'9px 22px',background:'var(--accent)',border:'none',
+              borderRadius:7,color:'#15110a',fontSize:12,fontWeight:600}}>
+            Save & Apply
+          </button>
+        </div>
       </div>
     </div>
   );
